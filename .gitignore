@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+build/
+dist/
+*.egg-info/
+.venv/
+
+# keep personal notes and their PDFs out of the repository
+*.hinote
+*.pdf
+*.strokes.json
+!examples/sample.hinote
+!examples/sample.pdf

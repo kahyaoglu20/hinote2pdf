@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hinote2pdf"
+dynamic = ["version"]
+description = "Convert Huawei Notes .hinote handwriting into lossless vector PDFs"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Ömer Kahyaoğlu" }]
+keywords = ["huawei", "huawei notes", "hinote", "pdf", "handwriting", "stylus", "matepad", "m-pencil", "vector", "converter"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Topic :: Multimedia :: Graphics :: Graphics Conversion",
+    "Topic :: Office/Business",
+]
+dependencies = ["pypdf>=4.0"]
+
+[project.optional-dependencies]
+verify = ["pypdfium2", "pillow"]
+
+[project.scripts]
+hinote2pdf = "hinote2pdf.__main__:run"
+
+[project.urls]
+Homepage = "https://kahyaoglu20.github.io/projects/hinote2pdf/"
+Source = "https://github.com/kahyaoglu20/hinote2pdf"
+Issues = "https://github.com/kahyaoglu20/hinote2pdf/issues"
+
+[tool.setuptools]
+packages = ["hinote2pdf"]
+
+[tool.setuptools.dynamic]
+version = { attr = "hinote2pdf.__version__" }

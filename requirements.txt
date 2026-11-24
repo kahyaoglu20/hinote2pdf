@@ -1,0 +1,4 @@
+pypdf>=4.0
+# optional, only for --verify:
+# pypdfium2
+# pillow
