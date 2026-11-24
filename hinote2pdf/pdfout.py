@@ -37,6 +37,10 @@ from . import brushes, pencilengine
 
 A4_SHORT, A4_LONG = 595.276, 841.89
 RADIUS_TOL = 0.005     # page units (page width = 1000)
+# quality presets: (width tolerance in page units, decimals of page-unit coordinates).
+# "hq" keeps every stroke a vector path but rounds it: its outline stays within ~10 um of the
+# exact one on A4 (a 600 dpi printer dot is 42 um), which roughly halves the file again.
+QUALITY = {"lossless": (RADIUS_TOL, 4), "hq": (0.03, 2)}
 STAMPS_PER_MASK = 12   # stamps per soft mask; small masks keep zooming fast in viewers
 KAPPA = 0.5522847498
 
@@ -45,14 +49,15 @@ KAPPA = 0.5522847498
 class Options:
     annotations: bool = False    # strokes as editable /Ink annotations instead of page content
     smooth: bool = True          # Catmull-Rom curve through the samples (False: straight joins)
-    background: bool = True      # embed the imported PDF page behind the ink
+    background: bool = True      # imported PDF page and paper colour behind the ink (False: ink on white)
     layers: bool = True          # put ink and highlighter on toggleable optional-content layers
     embed_source: bool = False   # attach the original .hinote to the PDF
     weight: float = 1.0          # scale every tip (1.0 = true stroke geometry)
+    quality: str = "lossless"    # "lossless" (exact geometry) or "hq" (high-quality lossy, smaller)
 
 
-def num(v):
-    s = "%.4f" % v
+def num(v, digits=4):
+    s = "%.*f" % (digits, v)
     s = s.rstrip("0").rstrip(".")
     return "0" if s in ("-0", "") else s
 
@@ -178,6 +183,10 @@ class StrokeModel:
         else:
             self.mode = "stamps"
         self.alpha = a
+        self.tol, self.digits = QUALITY.get(opts.quality, QUALITY["lossless"])
+
+    def fmt(self, v):
+        return num(v, self.digits)
 
     def empty(self):
         return self.size <= 0 or self.alpha <= 0 or (not self.segs and self.single is None)
@@ -196,29 +205,30 @@ def envelope_ops(m, out):
     """Union of the tip discs along the path as round-capped runs (current colour)."""
     if m.single is not None:
         x, y, p, v = m.single
-        disc(x, y, m.diameter(p, v) / 2.0, out)
+        disc(x, y, m.diameter(p, v) / 2.0, out, m.digits)
         return
+    f, tol = m.fmt, m.tol
     cur = None
     for seg in m.segs:
         cub = seg.cubic
         w_at = lambda u: m.diameter(seg.pressure(u), seg.speed(u))
         w0, w1 = w_at(0.0), w_at(1.0)
         chord = math.hypot(cub[3][0] - cub[0][0], cub[3][1] - cub[0][1])
-        n = max(1, int(math.ceil(min(abs(w1 - w0) / 2.0, chord) / RADIUS_TOL)))
+        n = max(1, int(math.ceil(min(abs(w1 - w0) / 2.0, chord) / tol)))
         for k in range(n):
             u0, u1 = k / n, (k + 1) / n
             w = max(w_at(u0), w_at(u1))
             piece = cub if n == 1 else _sub_cubic(cub, u0, u1)
-            if cur is None or not (w - RADIUS_TOL <= cur <= w + RADIUS_TOL):
+            if cur is None or not (w - tol <= cur <= w + tol):
                 if cur is not None:
                     out.append("S")
-                out.append("%s w %s %s m" % (num(w), num(piece[0][0]), num(piece[0][1])))
+                out.append("%s w %s %s m" % (f(w), f(piece[0][0]), f(piece[0][1])))
                 cur = w
             if seg.line:
-                out.append("%s %s l" % (num(piece[3][0]), num(piece[3][1])))
+                out.append("%s %s l" % (f(piece[3][0]), f(piece[3][1])))
             else:
-                out.append("%s %s %s %s %s %s c" % (num(piece[1][0]), num(piece[1][1]), num(piece[2][0]),
-                                                     num(piece[2][1]), num(piece[3][0]), num(piece[3][1])))
+                out.append("%s %s %s %s %s %s c" % (f(piece[1][0]), f(piece[1][1]), f(piece[2][0]),
+                                                     f(piece[2][1]), f(piece[3][0]), f(piece[3][1])))
     if cur is not None:
         out.append("S")
 
@@ -268,13 +278,14 @@ def stamp_centres(m):
     return [(x, y, m.size * r, p) for x, y, r, p in out]
 
 
-def disc(x, y, r, out):
+def disc(x, y, r, out, digits=4):
     k = KAPPA * r
-    out.append("%s %s m" % (num(x + r), num(y)))
-    out.append("%s %s %s %s %s %s c" % (num(x + r), num(y + k), num(x + k), num(y + r), num(x), num(y + r)))
-    out.append("%s %s %s %s %s %s c" % (num(x - k), num(y + r), num(x - r), num(y + k), num(x - r), num(y)))
-    out.append("%s %s %s %s %s %s c" % (num(x - r), num(y - k), num(x - k), num(y - r), num(x), num(y - r)))
-    out.append("%s %s %s %s %s %s c" % (num(x + k), num(y - r), num(x + r), num(y - k), num(x + r), num(y)))
+    f = lambda v: num(v, digits)
+    out.append("%s %s m" % (f(x + r), f(y)))
+    out.append("%s %s %s %s %s %s c" % (f(x + r), f(y + k), f(x + k), f(y + r), f(x), f(y + r)))
+    out.append("%s %s %s %s %s %s c" % (f(x - k), f(y + r), f(x - r), f(y + k), f(x - r), f(y)))
+    out.append("%s %s %s %s %s %s c" % (f(x - r), f(y - k), f(x - k), f(y - r), f(x), f(y - r)))
+    out.append("%s %s %s %s %s %s c" % (f(x + k), f(y - r), f(x + r), f(y - k), f(x + r), f(y)))
     out.append("h f")
 
 
@@ -442,10 +453,12 @@ def stroke_ops(b, res, m):
         y0 = min(y - side / 2 for x, y, side, _ in chunk) - 0.1
         x1 = max(x + side / 2 for x, y, side, _ in chunk) + 0.1
         y1 = max(y + side / 2 for x, y, side, _ in chunk) + 0.1
-        rect = "%s %s %s %s re f" % (num(x0), num(y0), num(x1 - x0), num(y1 - y0))
+        f = m.fmt
+        rect = "%s %s %s %s re f" % (f(x0), f(y0), f(x1 - x0), f(y1 - y0))
         mask_ops = ["1 g " + rect, "/M gs"]
         for x, y, side, _ in chunk:
-            mask_ops.append("q %s 0 0 %s %s %s cm /S sh Q" % (num(side), num(side), num(x), num(y)))
+            mask_ops.append("q %s 0 0 %s %s %s cm /S sh Q" % (num(side, max(m.digits, 3)), num(side, max(m.digits, 3)),
+                                                            f(x), f(y)))
         group = b.form(mask_ops, (x0, y0, x1, y1), mres, group_cs="/DeviceGray")
         smask = b.add(DictionaryObject({
             _name("/Type"): _name("/ExtGState"),
@@ -453,6 +466,75 @@ def stroke_ops(b, res, m):
                                                _name("/G"): group, _name("/TR"): b.invert_fn()})}))
         out.append("q %s gs %s rg %s Q" % (res.gs(smask, "M"), fill, rect))
     return out
+
+
+_RES_OPS = {b"Do": "/XObject", b"Tf": "/Font", b"gs": "/ExtGState", b"sh": "/Shading",
+            b"cs": "/ColorSpace", b"CS": "/ColorSpace"}
+_PRUNABLE = ("/XObject", "/Font", "/ExtGState", "/Shading", "/Pattern", "/Properties", "/ColorSpace")
+
+
+def _used_resources(resources, data, reader, depth=0):
+    """The part of a resource dictionary that the content stream `data` actually uses.
+
+    Some PDFs (scanned books, some exporters) give every page one shared dictionary that
+    lists the images and fonts of the whole document; copying it for a single page would
+    copy the whole book.  Form XObjects that share such a dictionary are pruned the same
+    way.  Anything unexpected falls back to the full dictionary, which is always correct.
+    """
+    from pypdf.generic import ContentStream, StreamObject
+
+    res = resources.get_object()
+    if not isinstance(res, DictionaryObject):
+        return resources
+    try:
+        ops = ContentStream(_raw_stream(data), reader).operations
+    except Exception:
+        return resources
+    used = {}
+    for operands, op in ops:
+        cat = _RES_OPS.get(op)
+        if cat and operands and isinstance(operands[0], NameObject):
+            used.setdefault(cat, set()).add(operands[0])
+        elif op in (b"scn", b"SCN") and operands and isinstance(operands[-1], NameObject):
+            used.setdefault("/Pattern", set()).add(operands[-1])
+        elif op in (b"BDC", b"DP") and len(operands) > 1 and isinstance(operands[1], NameObject):
+            used.setdefault("/Properties", set()).add(operands[1])
+        elif op == b"INLINE IMAGE" and isinstance(operands, dict):
+            cs = operands.get("settings", {}).get("/CS")
+            if isinstance(cs, NameObject):
+                used.setdefault("/ColorSpace", set()).add(cs)
+    out = DictionaryObject()
+    for key, value in res.items():
+        sub = value.get_object()
+        if key not in _PRUNABLE or not isinstance(sub, DictionaryObject):
+            out[key] = value                      # /ProcSet and anything unusual: keep as is
+            continue
+        kept = DictionaryObject()
+        for name in used.get(key, ()):
+            if name not in sub:
+                continue
+            item = sub.raw_get(name)
+            obj = item.get_object()
+            if (key == "/XObject" and depth < 8 and isinstance(obj, StreamObject)
+                    and obj.get("/Subtype") == "/Form" and "/Resources" in obj
+                    and obj["/Resources"].get_object() is res):
+                # a form that shares this document-wide dictionary: copy it with its own share
+                form = _raw_stream(obj.get_data())
+                for k, v in obj.items():
+                    if k not in ("/Length", "/Filter", "/DecodeParms", "/Resources"):
+                        form[k] = v
+                form[_name("/Resources")] = _used_resources(obj["/Resources"], obj.get_data(), reader, depth + 1)
+                item = form
+            kept[name] = item
+        if kept:
+            out[key] = kept
+    return out
+
+
+def _raw_stream(data):
+    s = DecodedStreamObject()
+    s.set_data(data)
+    return s
 
 
 def _background_xobject(b, reader, index):
@@ -466,7 +548,7 @@ def _background_xobject(b, reader, index):
     extra = {"/Type": _name("/XObject"), "/Subtype": _name("/Form"),
              "/BBox": ArrayObject([FloatObject(v) for v in (x0, y0, x0 + w, y0 + h)])}
     if "/Resources" in src:
-        extra["/Resources"] = src["/Resources"].clone(b.w)
+        extra["/Resources"] = _used_resources(src["/Resources"], data, reader).clone(b.w)
     if "/Group" in src:
         extra["/Group"] = src["/Group"].clone(b.w)
     ref = b.stream(data, extra)
@@ -596,7 +678,7 @@ def convert(note, out_path, opts=None):
             bg_ref, bg_cm, W, H = bg_cache[(member, index)]
         else:
             W, H = _default_page_size(note, page, canvas)
-            if page.template not in ("", "base1", None):
+            if opts.background and page.template not in ("", "base1", None):
                 templates.setdefault(page.template, []).append(page.number)
 
         pdf_page = writer.add_blank_page(width=W, height=H)
@@ -606,7 +688,7 @@ def convert(note, out_path, opts=None):
         ops = []
 
         r, g, bl, a = _argb_rgb(page.color_argb)
-        if a and (r, g, bl) != (1.0, 1.0, 1.0):
+        if opts.background and a and (r, g, bl) != (1.0, 1.0, 1.0):
             ops.append("q %s %s %s rg 0 0 %s %s re f Q" % (num(r), num(g), num(bl), num(W), num(H)))
         if bg:
             ops.append("q %s cm %s Do Q" % (" ".join(num(v) for v in bg_cm), res.xobject(bg_ref)))

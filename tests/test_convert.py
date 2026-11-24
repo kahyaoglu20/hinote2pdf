@@ -60,6 +60,62 @@ class ConvertSample(unittest.TestCase):
         self.assertTrue(all(c > 100 for c in counts), counts)
 
 
+class Options(unittest.TestCase):
+    def test_hq_is_smaller_and_complete(self):
+        note = open_hinote(SAMPLE)
+        with tempfile.TemporaryDirectory() as tmp:
+            sizes = {}
+            for q in ("lossless", "hq"):
+                out = os.path.join(tmp, q + ".pdf")
+                pdfout.convert(note, out, pdfout.Options(quality=q))
+                self.assertEqual(len(PdfReader(out).pages), 2)
+                sizes[q] = os.path.getsize(out)
+        note.close()
+        self.assertLess(sizes["hq"], sizes["lossless"] * 0.6, sizes)
+
+    def test_without_background_is_ink_only(self):
+        note = open_hinote(SAMPLE)
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "ink.pdf")
+            pdfout.convert(note, out, pdfout.Options(background=False))
+            page = PdfReader(out).pages[0]
+            self.assertNotIn("Fourier", page.extract_text())
+            self.assertGreater(len(page.get_contents().get_data()), 10000)     # the ink is there
+        note.close()
+
+
+class BackgroundPDF(unittest.TestCase):
+    def test_shared_resources_are_pruned_per_page(self):
+        """A page must not drag in the images of a whole book through a shared dictionary."""
+        import io
+        from pypdf import PdfWriter
+        from pypdf.generic import (DecodedStreamObject, DictionaryObject, NameObject,
+                                   NumberObject)
+        w = PdfWriter()
+        images = DictionaryObject()
+        for i in range(3):
+            im = DecodedStreamObject()
+            im.set_data(bytes([i * 80]) * 16)
+            im.update({NameObject("/Type"): NameObject("/XObject"), NameObject("/Subtype"): NameObject("/Image"),
+                       NameObject("/Width"): NumberObject(4), NameObject("/Height"): NumberObject(4),
+                       NameObject("/ColorSpace"): NameObject("/DeviceGray"),
+                       NameObject("/BitsPerComponent"): NumberObject(8)})
+            images[NameObject("/Im%d" % i)] = w._add_object(im)
+        shared = w._add_object(DictionaryObject({NameObject("/XObject"): images}))
+        for i in range(3):
+            page = w.add_blank_page(100, 100)
+            page[NameObject("/Resources")] = shared
+            c = DecodedStreamObject()
+            c.set_data(b"q 50 0 0 50 10 10 cm /Im%d Do Q" % i)
+            page[NameObject("/Contents")] = w._add_object(c)
+        buf = io.BytesIO()
+        w.write(buf)
+        reader = PdfReader(io.BytesIO(buf.getvalue()))
+        page = reader.pages[1]
+        used = pdfout._used_resources(page["/Resources"], page.get_contents().get_data(), reader)
+        self.assertEqual(sorted(used["/XObject"].keys()), ["/Im1"])
+
+
 class InkFile(unittest.TestCase):
     def test_empty_shape_registry(self):
         """A page without shapes may end with a shape registry that has no payload."""
